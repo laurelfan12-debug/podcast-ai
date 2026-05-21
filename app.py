@@ -7,9 +7,8 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 import anthropic
 
-OPENAI_KEY = "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"
-CLAUDE_KEY = "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"
-
+OPENAI_KEY = st.secrets["OPENAI_KEY"]
+CLAUDE_KEY = st.secrets["CLAUDE_KEY"]
 st.title("🎙️ 小宇宙播客 AI 助手")
 
 def get_audio_url(episode_url):
