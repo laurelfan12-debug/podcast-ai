@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 import os
@@ -57,26 +58,84 @@ def transcribe(audio_file):
 def get_summary(transcript):
     client = anthropic.Anthropic(api_key=CLAUDE_KEY)
     response = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=2000,
-        messages=[{"role": "user", "content": f"请对以下播客内容生成详细总结，包括：1.核心主题 2.主要观点 3.具体建议。\n\n播客内容：\n{transcript}"}]
+        messages=[{"role": "user", "content": f"""请对以下播客内容生成思维导图格式的总结。
+要求：使用 Markdown 标题层级来表示思维导图结构：
+- 用一个 # 标题作为中心主题（播客核心话题，尽量简短）
+- 用 ## 标题作为主要分支（如：核心观点、主要话题、具体建议、关键结论等）
+- 用 ### 标题和 - 列表作为细节内容
+只输出 Markdown 内容，不要添加任何解释或说明文字。
+
+播客内容：
+{transcript}"""}]
+    )
+    return response.content[0].text
+
+def get_quotes(transcript):
+    client = anthropic.Anthropic(api_key=CLAUDE_KEY)
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": f"""请从以下播客文字稿中，挑选 5 条最有价值的观点或金句，要求：
+1. 完整保留说话人的原始表达，逐字引用，不改写、不润色
+2. 每条控制在 1-3 句话以内
+3. 按价值从高到低排列
+4. 直接以如下格式输出，不要额外说明：
+
+> 原文1
+
+> 原文2
+
+> 原文3
+
+> 原文4
+
+> 原文5
+
+播客内容：
+{transcript}"""}]
     )
     return response.content[0].text
 
 def ask_question(transcript, question):
     client = anthropic.Anthropic(api_key=CLAUDE_KEY)
     response = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=1000,
         messages=[{"role": "user", "content": f"基于以下播客内容回答问题，没涉及可结合实际补充。\n\n播客内容：\n{transcript}\n\n问题：{question}"}]
     )
     return response.content[0].text
 
-# 初始化session state
+def render_markmap(markdown_text):
+    # Prevent </script> inside the template tag from breaking HTML parsing
+    safe_md = markdown_text.replace("</script>", "<\\/script>")
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {{ margin: 0; padding: 0; background: transparent; }}
+    svg.markmap {{ width: 100%; height: 500px; }}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-autoloader@0.17"></script>
+</head>
+<body>
+  <div class="markmap">
+    <script type="text/template">
+{safe_md}
+    </script>
+  </div>
+</body>
+</html>"""
+    components.html(html, height=520, scrolling=False)
+
+# 初始化 session state
 if "transcript" not in st.session_state:
     st.session_state.transcript = ""
 if "summary" not in st.session_state:
     st.session_state.summary = ""
+if "quotes" not in st.session_state:
+    st.session_state.quotes = ""
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "title" not in st.session_state:
@@ -99,17 +158,28 @@ if st.button("开始处理") and url:
         st.session_state.transcript = transcript
         st.write(f"转录完成：{len(transcript)} 字")
 
-    with st.spinner("生成总结..."):
+    with st.spinner("生成思维导图总结..."):
         summary = get_summary(transcript)
         st.session_state.summary = summary
 
-# 显示总结
+    with st.spinner("提取精华原话..."):
+        quotes = get_quotes(transcript)
+        st.session_state.quotes = quotes
+
+# 显示思维导图
 if st.session_state.summary:
-    st.subheader(f"📋 总结：{st.session_state.title}")
-    st.markdown(st.session_state.summary)
+    st.subheader(f"🗺️ 思维导图：{st.session_state.title}")
+    render_markmap(st.session_state.summary)
     st.divider()
 
-    # 问答
+# 显示原话摘录
+if st.session_state.quotes:
+    st.subheader("✏️ 精华原话摘录")
+    st.markdown(st.session_state.quotes)
+    st.divider()
+
+# 问答
+if st.session_state.summary:
     st.subheader("💬 问答")
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):

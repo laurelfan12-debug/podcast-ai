@@ -1,6 +1,10 @@
+import os
 import anthropic
 
-client = anthropic.Anthropic(api_key="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")
+api_key = os.environ.get("CLAUDE_KEY")
+if not api_key:
+    raise ValueError("请设置环境变量 CLAUDE_KEY")
+client = anthropic.Anthropic(api_key=api_key)
 
 with open("transcript.txt", "r", encoding="utf-8") as f:
     transcript = f.read()

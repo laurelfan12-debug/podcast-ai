@@ -1,6 +1,10 @@
+import os
 from openai import OpenAI
 
-client = OpenAI(api_key="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")
+api_key = os.environ.get("OPENAI_KEY")
+if not api_key:
+    raise ValueError("请设置环境变量 OPENAI_KEY")
+client = OpenAI(api_key=api_key)
 
 print("开始转录，请稍等...")
 with open("episode_small.mp3", "rb") as f:

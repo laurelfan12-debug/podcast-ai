@@ -6,8 +6,10 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 import anthropic
 
-OPENAI_KEY = "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"
-CLAUDE_KEY = "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"
+OPENAI_KEY = os.environ.get("OPENAI_KEY", "")
+CLAUDE_KEY = os.environ.get("CLAUDE_KEY", "")
+if not OPENAI_KEY or not CLAUDE_KEY:
+    raise ValueError("请设置环境变量 OPENAI_KEY 和 CLAUDE_KEY")
 
 
 def get_audio_url(episode_url):
