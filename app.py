@@ -4,6 +4,7 @@ import requests
 import json
 import os
 import subprocess
+import time
 from bs4 import BeautifulSoup
 from openai import OpenAI
 import anthropic
@@ -55,8 +56,11 @@ def transcribe(audio_file):
         full_text += response.text + "\n"
     return full_text
 
+MAX_TRANSCRIPT_CHARS = 80000
+
 def get_summary(transcript):
     client = anthropic.Anthropic(api_key=CLAUDE_KEY)
+    text = transcript[:MAX_TRANSCRIPT_CHARS]
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
@@ -68,12 +72,13 @@ def get_summary(transcript):
 只输出 Markdown 内容，不要添加任何解释或说明文字。
 
 播客内容：
-{transcript}"""}]
+{text}"""}]
     )
     return response.content[0].text
 
 def get_quotes(transcript):
     client = anthropic.Anthropic(api_key=CLAUDE_KEY)
+    text = transcript[:MAX_TRANSCRIPT_CHARS]
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,
@@ -161,6 +166,8 @@ if st.button("开始处理") and url:
     with st.spinner("生成思维导图总结..."):
         summary = get_summary(transcript)
         st.session_state.summary = summary
+
+    time.sleep(5)
 
     with st.spinner("提取精华原话..."):
         quotes = get_quotes(transcript)
