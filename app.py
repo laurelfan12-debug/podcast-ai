@@ -4,7 +4,7 @@ import requests
 import json
 import os
 import subprocess
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from openai import OpenAI
 import anthropic
@@ -33,6 +33,10 @@ def download_and_compress(audio_url):
     ], capture_output=True)
     return "episode_small.mp3"
 
+def _transcribe_segment(seg_path, client):
+    with open(seg_path, "rb") as f:
+        return client.audio.transcriptions.create(model="whisper-1", file=f, language="zh").text
+
 def transcribe(audio_file):
     client = OpenAI(api_key=OPENAI_KEY)
     file_size = os.path.getsize(audio_file) / 1024 / 1024
@@ -40,6 +44,7 @@ def transcribe(audio_file):
         with open(audio_file, "rb") as f:
             response = client.audio.transcriptions.create(model="whisper-1", file=f, language="zh")
         return response.text
+
     segment_duration = 15 * 60
     os.makedirs("segments", exist_ok=True)
     subprocess.run([
@@ -48,41 +53,54 @@ def transcribe(audio_file):
         "-c", "copy", "segments/seg%03d.mp3"
     ], capture_output=True)
     segments = sorted(os.listdir("segments"))
-    full_text = ""
-    for i, seg in enumerate(segments):
-        st.write(f"转录第 {i+1}/{len(segments)} 段...")
-        with open(f"segments/{seg}", "rb") as f:
-            response = client.audio.transcriptions.create(model="whisper-1", file=f, language="zh")
-        full_text += response.text + "\n"
-    return full_text
+    n = len(segments)
+
+    progress = st.progress(0, text=f"并行转录 {n} 个片段...")
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(n, 5)) as executor:
+        future_to_idx = {
+            executor.submit(_transcribe_segment, f"segments/{seg}", client): i
+            for i, seg in enumerate(segments)
+        }
+        completed = 0
+        for future in as_completed(future_to_idx):
+            i = future_to_idx[future]
+            results[i] = future.result()
+            completed += 1
+            progress.progress(completed / n, text=f"已完成 {completed}/{n} 段")
+    progress.empty()
+    return "\n".join(results[i] for i in range(n))
 
 MAX_TRANSCRIPT_CHARS = 80000
 
+def _claude_client():
+    return anthropic.Anthropic(api_key=CLAUDE_KEY)
+
 def get_summary(transcript):
-    client = anthropic.Anthropic(api_key=CLAUDE_KEY)
     text = transcript[:MAX_TRANSCRIPT_CHARS]
-    response = client.messages.create(
+    response = _claude_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
-        messages=[{"role": "user", "content": f"""请对以下播客内容生成思维导图格式的总结。
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": f"播客内容：\n{text}", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": """请对以上播客内容生成思维导图格式的总结。
 要求：使用 Markdown 标题层级来表示思维导图结构：
 - 用一个 # 标题作为中心主题（播客核心话题，尽量简短）
 - 用 ## 标题作为主要分支（如：核心观点、主要话题、具体建议、关键结论等）
 - 用 ### 标题和 - 列表作为细节内容
-只输出 Markdown 内容，不要添加任何解释或说明文字。
-
-播客内容：
-{text}"""}]
+只输出 Markdown 内容，不要添加任何解释或说明文字。"""},
+        ]}]
     )
     return response.content[0].text
 
 def get_quotes(transcript):
-    client = anthropic.Anthropic(api_key=CLAUDE_KEY)
     text = transcript[:MAX_TRANSCRIPT_CHARS]
-    response = client.messages.create(
+    response = _claude_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,
-        messages=[{"role": "user", "content": f"""请从以下播客文字稿中，挑选 5 条最有价值的观点或金句，要求：
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": f"播客内容：\n{text}", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": """请从以上播客文字稿中，挑选 5 条最有价值的观点或金句，要求：
 1. 完整保留说话人的原始表达，逐字引用，不改写、不润色
 2. 每条控制在 1-3 句话以内
 3. 按价值从高到低排列
@@ -96,19 +114,20 @@ def get_quotes(transcript):
 
 > 原文4
 
-> 原文5
-
-播客内容：
-{transcript}"""}]
+> 原文5"""},
+        ]}]
     )
     return response.content[0].text
 
 def ask_question(transcript, question):
-    client = anthropic.Anthropic(api_key=CLAUDE_KEY)
-    response = client.messages.create(
+    text = transcript[:MAX_TRANSCRIPT_CHARS]
+    response = _claude_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
-        messages=[{"role": "user", "content": f"基于以下播客内容回答问题，没涉及可结合实际补充。\n\n播客内容：\n{transcript}\n\n问题：{question}"}]
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": f"播客内容：\n{text}", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": f"基于以上播客内容回答问题，没涉及可结合实际补充。\n\n问题：{question}"},
+        ]}]
     )
     return response.content[0].text
 
@@ -163,14 +182,13 @@ if st.button("开始处理") and url:
         st.session_state.transcript = transcript
         st.write(f"转录完成：{len(transcript)} 字")
 
-    with st.spinner("生成思维导图总结..."):
-        summary = get_summary(transcript)
+    with st.spinner("并行生成思维导图 & 提取金句..."):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_summary = executor.submit(get_summary, transcript)
+            future_quotes = executor.submit(get_quotes, transcript)
+            summary = future_summary.result()
+            quotes = future_quotes.result()
         st.session_state.summary = summary
-
-    time.sleep(5)
-
-    with st.spinner("提取精华原话..."):
-        quotes = get_quotes(transcript)
         st.session_state.quotes = quotes
 
 # 显示思维导图
