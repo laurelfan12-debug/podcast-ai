@@ -4,6 +4,7 @@ import requests
 import json
 import os
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -24,13 +25,22 @@ def get_audio_url(episode_url):
 
 def download_and_compress(audio_url):
     r = requests.get(audio_url, stream=True, timeout=120)
+    total = int(r.headers.get('content-length', 0))
+    downloaded = 0
+    bar = st.progress(0, text="下载音频中...")
     with open("episode.m4a", 'wb') as f:
-        for chunk in r.iter_content(chunk_size=1024*1024):
+        for chunk in r.iter_content(chunk_size=512 * 1024):
             f.write(chunk)
+            downloaded += len(chunk)
+            if total:
+                bar.progress(min(downloaded / total, 1.0),
+                             text=f"下载中 {downloaded // 1024 // 1024} / {total // 1024 // 1024} MB")
+    bar.progress(1.0, text="压缩音频中...")
     subprocess.run([
         "ffmpeg", "-y", "-i", "episode.m4a",
         "-ac", "1", "-ar", "16000", "-b:a", "16k", "episode_small.mp3"
     ], capture_output=True)
+    bar.empty()
     return "episode_small.mp3"
 
 def _transcribe_segment(seg_path, client):
@@ -76,9 +86,9 @@ MAX_TRANSCRIPT_CHARS = 80000
 def _claude_client():
     return anthropic.Anthropic(api_key=CLAUDE_KEY)
 
-def get_summary(transcript):
+def stream_summary(transcript):
     text = transcript[:MAX_TRANSCRIPT_CHARS]
-    response = _claude_client().messages.create(
+    with _claude_client().messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": [
@@ -90,8 +100,8 @@ def get_summary(transcript):
 - 用 ### 标题和 - 列表作为细节内容
 只输出 Markdown 内容，不要添加任何解释或说明文字。"""},
         ]}]
-    )
-    return response.content[0].text
+    ) as stream:
+        yield from stream.text_stream
 
 def get_quotes(transcript):
     text = transcript[:MAX_TRANSCRIPT_CHARS]
@@ -182,14 +192,27 @@ if st.button("开始处理") and url:
         st.session_state.transcript = transcript
         st.write(f"转录完成：{len(transcript)} 字")
 
-    with st.spinner("并行生成思维导图 & 提取金句..."):
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_summary = executor.submit(get_summary, transcript)
-            future_quotes = executor.submit(get_quotes, transcript)
-            summary = future_summary.result()
-            quotes = future_quotes.result()
-        st.session_state.summary = summary
-        st.session_state.quotes = quotes
+    # 金句在后台线程并行获取
+    quotes_result = [None]
+    def _fetch_quotes():
+        quotes_result[0] = get_quotes(transcript)
+    quotes_thread = threading.Thread(target=_fetch_quotes)
+    quotes_thread.start()
+
+    # 思维导图流式输出，边生成边显示
+    st.write("**生成思维导图中...**")
+    summary_box = st.empty()
+    summary = ""
+    for chunk in stream_summary(transcript):
+        summary += chunk
+        summary_box.markdown(summary)
+    st.session_state.summary = summary
+    summary_box.empty()
+
+    # 等待金句完成
+    with st.spinner("提取金句中..."):
+        quotes_thread.join()
+    st.session_state.quotes = quotes_result[0]
 
 # 显示思维导图
 if st.session_state.summary:
