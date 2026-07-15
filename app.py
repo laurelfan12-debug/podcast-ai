@@ -3,8 +3,13 @@ import streamlit.components.v1 as components
 import requests
 import json
 import os
+import shutil
 import threading
 import subprocess
+
+# 解析 ffmpeg：优先用系统 PATH（Streamlit Cloud 由 packages.txt 安装），
+# 本地回退到项目目录内自带的 ffmpeg.exe（Windows 默认不搜索当前目录）。
+FFMPEG = shutil.which("ffmpeg") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg.exe")
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -42,7 +47,7 @@ def download_and_compress(audio_url, episode_id):
                              text=f"下载中 {downloaded // 1024 // 1024} / {total // 1024 // 1024} MB")
     bar.progress(1.0, text="压缩音频中...")
     subprocess.run([
-        "ffmpeg", "-y", "-i", src,
+        FFMPEG, "-y", "-i", src,
         "-ac", "1", "-ar", "16000", "-b:a", "16k", dst
     ], capture_output=True)
     bar.empty()
@@ -64,7 +69,7 @@ def transcribe(audio_file, episode_id):
     seg_dir = f"segments_{episode_id}"
     os.makedirs(seg_dir, exist_ok=True)
     subprocess.run([
-        "ffmpeg", "-y", "-i", audio_file,
+        FFMPEG, "-y", "-i", audio_file,
         "-f", "segment", "-segment_time", str(segment_duration),
         "-c", "copy", f"{seg_dir}/seg%03d.mp3"
     ], capture_output=True)
