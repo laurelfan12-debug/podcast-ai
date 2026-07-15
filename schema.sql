@@ -39,7 +39,9 @@ create index if not exists chunks_episode_idx
     on chunks (episode_id);
 
 -- 将来做相似度检索时用的近似向量索引（cosine 距离）
--- 数据量较大后再建更划算，这里先备好：
+-- HNSW 无需训练、空表即可建，召回率与稳定性优于 ivfflat：
+--   m               每个节点的最大连接数（默认 16）
+--   ef_construction 构建时的候选列表大小，越大越准但越慢（默认 64）
 create index if not exists chunks_embedding_idx
-    on chunks using ivfflat (embedding vector_cosine_ops)
-    with (lists = 100);
+    on chunks using hnsw (embedding vector_cosine_ops)
+    with (m = 16, ef_construction = 64);
