@@ -2,6 +2,9 @@
 *.m4a
 *.mp3
 segments/
+segments_*/
+episode_*.m4a
+episode_*.mp3
 transcript.txt
 summary.txt
 __pycache__/
